@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BlastRadius AI — Contract Governance Agent</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #252830;
+    --border: #2d3040;
+    --text: #e4e6eb;
+    --muted: #8b8fa3;
+    --accent: #7c5cfc;
+    --accent-hover: #9178ff;
+    --green: #00c853;
+    --red: #ef5350;
+    --orange: #ffa726;
+    --user-bg: #2a2d4a;
+    --ai-bg: #1e2130;
+    --tool-bg: #1a2332;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  header .logo {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, var(--accent), #ff6b6b);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 700;
+  }
+
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+    margin-left: auto;
+    animation: pulse 2s infinite;
+  }
+  .status-dot.offline { background: var(--red); animation: none; }
+  .status-label { font-size: 11px; color: var(--muted); margin-left: 6px; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .chat-area {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .msg {
+    max-width: 80%;
+    padding: 14px 18px;
+    border-radius: 16px;
+    line-height: 1.6;
+    font-size: 14px;
+    animation: fadeIn 0.3s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .msg.user {
+    background: var(--user-bg);
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+  }
+
+  .msg.ai {
+    background: var(--ai-bg);
+    border: 1px solid var(--border);
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+  }
+
+  .msg.ai .label {
+    font-size: 11px;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .tool-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .tool-badge {
+    background: var(--tool-bg);
+    border: 1px solid #1e3a5f;
+    color: #5dade2;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+
+  .msg.ai pre {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    overflow-x: auto;
+    font-size: 12px;
+    margin-top: 8px;
+    font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .typing {
+    align-self: flex-start;
+    padding: 14px 18px;
+    background: var(--ai-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    border-bottom-left-radius: 4px;
+    display: flex;
+    gap: 6px;
+    animation: fadeIn 0.3s ease;
+  }
+
+  .typing span {
+    width: 8px; height: 8px;
+    background: var(--muted);
+    border-radius: 50%;
+    animation: bounce 1.4s infinite;
+  }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes bounce {
+    0%, 60%, 100% { transform: translateY(0); }
+    30% { transform: translateY(-8px); }
+  }
+
+  .input-area {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .input-area input {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 16px;
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .input-area input:focus { border-color: var(--accent); }
+  .input-area input::placeholder { color: var(--muted); }
+
+  .input-area button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 12px 24px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+  }
+
+  .input-area button:hover { background: var(--accent-hover); }
+  .input-area button:active { transform: scale(0.97); }
+  .input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0 24px 12px;
+    background: var(--surface);
+  }
+
+  .suggestions button {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .suggestions button:hover {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .welcome {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--muted);
+  }
+  .welcome h2 { color: var(--text); font-size: 22px; margin-bottom: 8px; }
+  .welcome p { font-size: 14px; max-width: 400px; margin: 0 auto; line-height: 1.6; }
+
+  .chat-area::-webkit-scrollbar { width: 6px; }
+  .chat-area::-webkit-scrollbar-track { background: transparent; }
+  .chat-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">B</div>
+  <div>
+    <h1>BlastRadius AI</h1>
+    <div class="subtitle">Data Contract Governance Agent</div>
+  </div>
+  <div class="status-dot" id="statusDot"></div>
+  <span class="status-label" id="statusLabel">Checking...</span>
+</header>
+
+<div class="chat-area" id="chatArea">
+  <div class="welcome" id="welcome">
+    <h2>Ask me anything about your data contracts</h2>
+    <p>I can check compliance, detect schema drift, list violations, and explain what broke — all powered by OpenAI + OpenMetadata.</p>
+  </div>
+</div>
+
+<div class="suggestions" id="suggestions">
+  <button onclick="ask('Which contracts are currently violated?')">Which contracts are violated?</button>
+  <button onclick="ask('Detect drift on seller-transactions')">Detect drift on seller-transactions</button>
+  <button onclick="ask('Give me the health status of all contracts')">Health of all contracts</button>
+  <button onclick="ask('What is the SLA for buyer-orders?')">SLA for buyer-orders</button>
+</div>
+
+<div class="input-area">
+  <input type="text" id="input" placeholder="Ask about contracts, drift, violations..." autofocus
+         onkeydown="if(event.key==='Enter') send()">
+  <button onclick="send()" id="sendBtn">Send</button>
+</div>
+
+<script>
+const chatArea = document.getElementById('chatArea');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('sendBtn');
+const suggestions = document.getElementById('suggestions');
+const welcome = document.getElementById('welcome');
+const statusDot = document.getElementById('statusDot');
+const statusLabel = document.getElementById('statusLabel');
+
+let history = [];
+
+async function checkHealth() {
+  try {
+    const r = await fetch('/health');
+    const d = await r.json();
+    const ok = d.openai_configured && d.openmetadata === 'ok';
+    statusDot.className = ok ? 'status-dot' : 'status-dot offline';
+    statusLabel.textContent = ok ? 'Connected' :
+      !d.openai_configured ? 'OpenAI key missing' : 'OM unreachable';
+  } catch {
+    statusDot.className = 'status-dot offline';
+    statusLabel.textContent = 'Offline';
+  }
+}
+
+function addMsg(role, content, toolCalls) {
+  if (welcome) welcome.style.display = 'none';
+
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+
+  if (role === 'ai') {
+    let html = '<div class="label">BlastRadius AI</div>';
+
+    if (toolCalls && toolCalls.length > 0) {
+      html += '<div class="tool-badges">';
+      toolCalls.forEach(tc => {
+        const args = tc.args && Object.keys(tc.args).length > 0
+          ? `(${Object.values(tc.args).join(', ')})` : '()';
+        html += `<span class="tool-badge">${tc.tool}${args}</span>`;
+      });
+      html += '</div>';
+    }
+
+    const formatted = content
+      .replace(/```([\s\S]*?)```/g, '<pre>$1</pre>')
+      .replace(/`([^`]+)`/g, '<code style="background:#252830;padding:2px 6px;border-radius:4px;font-size:12px">$1</code>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
+
+    html += formatted;
+    div.innerHTML = html;
+  } else {
+    div.textContent = content;
+  }
+
+  chatArea.appendChild(div);
+  chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+function showTyping() {
+  const div = document.createElement('div');
+  div.className = 'typing';
+  div.id = 'typing';
+  div.innerHTML = '<span></span><span></span><span></span>';
+  chatArea.appendChild(div);
+  chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+function hideTyping() {
+  const el = document.getElementById('typing');
+  if (el) el.remove();
+}
+
+async function send() {
+  const msg = input.value.trim();
+  if (!msg) return;
+
+  input.value = '';
+  sendBtn.disabled = true;
+  suggestions.style.display = 'none';
+
+  addMsg('user', msg);
+  history.push({ role: 'user', content: msg });
+
+  showTyping();
+
+  try {
+    const r = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, history: history.slice(-10) }),
+    });
+
+    const data = await r.json();
+    hideTyping();
+
+    addMsg('ai', data.reply, data.tool_calls);
+    history.push({ role: 'assistant', content: data.reply });
+  } catch (err) {
+    hideTyping();
+    addMsg('ai', `Connection error: ${err.message}. Make sure OPENAI_API_KEY is set.`, []);
+  }
+
+  sendBtn.disabled = false;
+  input.focus();
+}
+
+function ask(text) {
+  input.value = text;
+  send();
+}
+
+checkHealth();
+setInterval(checkHealth, 30000);
+</script>
+
+</body>
+</html>

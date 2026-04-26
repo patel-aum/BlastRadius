@@ -304,6 +304,7 @@ services:
       OM_ADMIN_PASSWORD: ${OM_ADMIN_PASSWORD:-admin}
       CONTRACTS_DIR: /contracts
       MCP_PORT: 8000
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       PYTHONPATH: /contract_engine
     volumes:
       - ./contracts:/contracts:ro

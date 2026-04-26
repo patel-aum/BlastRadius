@@ -1,0 +1,115 @@
+name: Deploy & Seed Stack
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  EC2_HOST: ${{ secrets.EC2_HOST }}
+  EC2_USER: ec2-user
+  APP_DIR: /home/ec2-user/app
+
+jobs:
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          cat >> ~/.ssh/config <<EOF
+          Host deploy-target
+            HostName ${{ env.EC2_HOST }}
+            User ${{ env.EC2_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking no
+          EOF
+
+      - name: Pull latest code on EC2
+        run: |
+          ssh deploy-target << 'REMOTE'
+            cd ${{ env.APP_DIR }}
+            git pull origin main
+            echo "Code updated."
+          REMOTE
+
+      - name: Inject OpenAI API key
+        run: |
+          ssh deploy-target << 'REMOTE'
+            cd ${{ env.APP_DIR }}
+            if grep -q "^OPENAI_API_KEY=" .env 2>/dev/null; then
+              sed -i 's|^OPENAI_API_KEY=.*|OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}|' .env
+            else
+              echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+            fi
+            echo "OpenAI API key configured."
+          REMOTE
+
+      - name: Rebuild and restart containers
+        run: |
+          ssh deploy-target << 'REMOTE'
+            cd ${{ env.APP_DIR }}
+            docker compose up -d --build contract-sync mcp-server dashboard
+            echo "Custom services rebuilt."
+          REMOTE
+
+      - name: Wait for OpenMetadata to be healthy
+        run: |
+          ssh deploy-target << 'REMOTE'
+            echo "Waiting for OpenMetadata API..."
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8585/api/v1/system/version > /dev/null 2>&1; then
+                echo "OpenMetadata is healthy."
+                exit 0
+              fi
+              echo "  Attempt $i/30 - not ready, waiting 10s..."
+              sleep 10
+            done
+            echo "ERROR: OpenMetadata did not become healthy in 5 minutes"
+            exit 1
+          REMOTE
+
+      - name: Seed demo data
+        run: |
+          ssh deploy-target << 'REMOTE'
+            cd ${{ env.APP_DIR }}
+            docker compose run --rm \
+              -e OM_SERVER_URL=http://openmetadata-server:8585/api \
+              -e OM_ADMIN_USER=admin@openmetadata.org \
+              -e OM_ADMIN_PASSWORD=admin \
+              -e CONTRACTS_DIR=/contracts \
+              -v $(pwd)/seed:/seed:ro \
+              mcp-server python3 /seed/setup.py
+            echo "Seed complete."
+          REMOTE
+
+      - name: Verify services
+        run: |
+          ssh deploy-target << 'REMOTE'
+            echo "=== Service Health ==="
+            curl -sf http://localhost:8585/api/v1/system/version && echo " OpenMetadata: OK" || echo " OpenMetadata: DOWN"
+            curl -sf http://localhost:8501 > /dev/null && echo " Dashboard: OK" || echo " Dashboard: DOWN"
+            curl -sf http://localhost:8000/health 2>/dev/null && echo " MCP+AI Agent: OK" || echo " MCP Server: starting"
+            curl -sf http://localhost:8080/health > /dev/null 2>&1 && echo " Airflow: OK" || echo " Airflow: starting"
+            echo "=== Container Status ==="
+            docker compose ps --format "table {{.Name}}\t{{.Status}}"
+          REMOTE
+
+      - name: Print access URLs
+        run: |
+          echo "============================================"
+          echo "  Deployment complete!"
+          echo "============================================"
+          echo "  OpenMetadata: http://${{ env.EC2_HOST }}:8585"
+          echo "  Dashboard:    http://${{ env.EC2_HOST }}:8501"
+          echo "  MCP Server:   http://${{ env.EC2_HOST }}:8000/mcp"
+          echo "  AI Chat:      POST http://${{ env.EC2_HOST }}:8000/chat"
+          echo "  Airflow:      http://${{ env.EC2_HOST }}:8080"
+          echo "============================================"

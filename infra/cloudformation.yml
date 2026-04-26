@@ -28,9 +28,9 @@ Parameters:
 
   InstanceType:
     Type: String
-    Default: t3.xlarge
-    AllowedValues: [t3.large, t3.xlarge, t3.2xlarge]
-    Description: EC2 instance size (t3.xlarge = 4 vCPU, 16 GB recommended)
+    Default: m7i-flex.large
+    AllowedValues: [t3.micro, t3.small, t4g.small, t4g.micro, m7i-flex.large, c7i-flex.large]
+    Description: EC2 instance size (m7i-flex.large = 2 vCPU, 8 GB — best free-tier option)
 
   VolumeSize:
     Type: Number
@@ -220,7 +220,58 @@ Resources:
           sed -i 's|^OM_ADMIN_USER=.*|OM_ADMIN_USER=admin@openmetadata.org|' .env
           sed -i 's|^OM_ADMIN_PASSWORD=.*|OM_ADMIN_PASSWORD=admin|' .env
 
-          # ── 8. Start the full stack ──
+          # ── 8. Create docker-compose override for 8 GB instance ──
+          cat > docker-compose.override.yml << 'OVERRIDE'
+          services:
+            elasticsearch:
+              environment:
+                - ES_JAVA_OPTS=-Xms512m -Xmx512m
+              deploy:
+                resources:
+                  limits:
+                    memory: 1024M
+            openmetadata-server:
+              environment:
+                OPENMETADATA_HEAP_OPTS: "-Xmx512m -Xms512m"
+              deploy:
+                resources:
+                  limits:
+                    memory: 1024M
+            ingestion:
+              deploy:
+                resources:
+                  limits:
+                    memory: 1024M
+            mysql:
+              deploy:
+                resources:
+                  limits:
+                    memory: 384M
+            contract-sync:
+              deploy:
+                resources:
+                  limits:
+                    memory: 192M
+            mcp-server:
+              deploy:
+                resources:
+                  limits:
+                    memory: 192M
+            dashboard:
+              deploy:
+                resources:
+                  limits:
+                    memory: 192M
+          OVERRIDE
+
+          # ── 9. Create 2 GB swap for safety ──
+          dd if=/dev/zero of=/swapfile bs=1M count=2048
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile
+          echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
+
+          # ── 10. Start the full stack ──
           docker compose up -d --build
 
           echo "===== Bootstrap complete ====="

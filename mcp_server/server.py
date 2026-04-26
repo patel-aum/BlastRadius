@@ -1,4 +1,8 @@
-"""MCP Server — Data Contract Governance tools for AI agents."""
+"""MCP Server — Data Contract Governance tools for AI agents.
+
+Exposes MCP tools for contract validation, drift detection, and violation listing.
+Includes an OpenAI-powered /chat REST endpoint for natural-language queries.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +13,8 @@ import sys
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
-# In Docker, PYTHONPATH=/contract_engine is set via docker-compose.
-# For local dev, fall back to the sibling directory.
 _engine_dir = os.getenv("PYTHONPATH", "")
 if not _engine_dir:
     _engine_dir = str(Path(__file__).resolve().parent.parent / "contract_engine")
@@ -32,6 +34,7 @@ CONTRACTS_DIR = os.getenv("CONTRACTS_DIR", "/contracts")
 SERVICE_NAME = "demo_postgres"
 MCP_HOST = "0.0.0.0"
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 mcp = FastMCP(
     "DataContractGovernance",
@@ -268,6 +271,198 @@ def detect_drift(
     return json.dumps(drift_report, indent=2, default=str)
 
 
+# ── OpenAI Agent with function-calling ──────────────────────────
+
+TOOL_FUNCTIONS = {
+    "validate_contract": validate_contract,
+    "list_violations": list_violations,
+    "get_contract_status": get_contract_status,
+    "detect_drift": detect_drift,
+}
+
+OPENAI_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "validate_contract",
+            "description": "Validate a data contract against OpenMetadata. Returns compliance report.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contract_name": {"type": "string", "description": "Name of the data product (e.g. 'seller-transactions')"}
+                },
+                "required": ["contract_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_violations",
+            "description": "List all data contracts that are currently violated.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_contract_status",
+            "description": "Get overall health status of a specific data contract.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contract_name": {"type": "string", "description": "Name of the data product"}
+                },
+                "required": ["contract_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "detect_drift",
+            "description": "Detect schema drift between contract declaration and actual table in OpenMetadata.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contract_name": {"type": "string", "description": "Name of the data product"}
+                },
+                "required": ["contract_name"],
+            },
+        },
+    },
+]
+
+SYSTEM_PROMPT = (
+    "You are BlastRadius AI, a data contract governance assistant. "
+    "You help data teams understand their contract compliance, detect schema drift, "
+    "and find violations. You have access to tools that query OpenMetadata in real time. "
+    "Always call tools to get live data before answering. Be concise and actionable."
+)
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[dict] = Field(default_factory=list)
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    tool_calls: list[dict] = Field(default_factory=list)
+
+
+async def _run_openai_agent(user_message: str, history: list[dict]) -> ChatResponse:
+    """Run an OpenAI function-calling loop against our MCP tools."""
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return ChatResponse(
+            reply="OpenAI SDK not installed. Set OPENAI_API_KEY and install openai package.",
+            tool_calls=[],
+        )
+
+    if not OPENAI_API_KEY:
+        return ChatResponse(
+            reply="OPENAI_API_KEY not configured. Set it in the environment to enable AI chat.",
+            tool_calls=[],
+        )
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+
+    tool_calls_log: list[dict] = []
+
+    for _ in range(5):
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            tools=OPENAI_TOOLS,
+            tool_choice="auto",
+        )
+
+        choice = response.choices[0]
+
+        if choice.finish_reason == "tool_calls" or choice.message.tool_calls:
+            messages.append(choice.message)
+
+            for tc in choice.message.tool_calls:
+                fn_name = tc.function.name
+                fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+
+                logger.info("OpenAI called tool: %s(%s)", fn_name, fn_args)
+                tool_calls_log.append({"tool": fn_name, "args": fn_args})
+
+                fn = TOOL_FUNCTIONS.get(fn_name)
+                if fn:
+                    result = fn(**fn_args)
+                else:
+                    result = json.dumps({"error": f"Unknown tool: {fn_name}"})
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result,
+                })
+        else:
+            return ChatResponse(
+                reply=choice.message.content or "No response generated.",
+                tool_calls=tool_calls_log,
+            )
+
+    return ChatResponse(reply="Agent reached max iterations.", tool_calls=tool_calls_log)
+
+
+# ── Mount /chat as a custom HTTP endpoint on the MCP app ────────
+
+def _mount_chat_endpoint():
+    """Add /chat, /health, and / (chat UI) REST endpoints alongside the MCP transport."""
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, HTMLResponse
+    from starlette.routing import Route
+    import asyncio
+
+    chat_html_path = Path(__file__).parent / "chat.html"
+
+    async def index_endpoint(request: Request) -> HTMLResponse:
+        if chat_html_path.exists():
+            return HTMLResponse(chat_html_path.read_text())
+        return HTMLResponse("<h1>BlastRadius AI</h1><p>chat.html not found</p>")
+
+    async def chat_endpoint(request: Request) -> JSONResponse:
+        body = await request.json()
+        req = ChatRequest(**body)
+        resp = await _run_openai_agent(req.message, req.history)
+        return JSONResponse(resp.model_dump())
+
+    async def health_endpoint(request: Request) -> JSONResponse:
+        om_ok = _get_client().health_check()
+        return JSONResponse({
+            "mcp_server": "ok",
+            "openmetadata": "ok" if om_ok else "unreachable",
+            "openai_configured": bool(OPENAI_API_KEY),
+        })
+
+    return [
+        Route("/", index_endpoint, methods=["GET"]),
+        Route("/chat", chat_endpoint, methods=["POST"]),
+        Route("/health", health_endpoint, methods=["GET"]),
+    ]
+
+
 if __name__ == "__main__":
     logger.info("Starting MCP server on %s:%d", MCP_HOST, MCP_PORT)
-    mcp.run(transport="streamable-http")
+    logger.info("OpenAI API: %s", "configured" if OPENAI_API_KEY else "NOT SET (chat disabled)")
+
+    try:
+        extra_routes = _mount_chat_endpoint()
+        app = mcp.streamable_http_app()
+        app.routes.extend(extra_routes)
+
+        import uvicorn
+        uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)
+    except Exception:
+        logger.warning("Falling back to default MCP transport")
+        mcp.run(transport="streamable-http")
