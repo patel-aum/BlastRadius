@@ -87,7 +87,6 @@ desktop.ini
 # ──────────────────────────────────────────────
 # Project-specific: test / scratch files
 # ──────────────────────────────────────────────
-script.md
 test_local.py
 test_login.py
 generate_pdf.py
@@ -99,3 +98,4 @@ generate_pdf.py
 output/
 reports/
 tmp/
+OpenMetadata_Hackathon_Ideas_2026.pdf
