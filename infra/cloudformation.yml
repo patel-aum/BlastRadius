@@ -1,0 +1,285 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Contract Guardian — Single EC2 (t3.xlarge) running the full stack
+  via Docker Compose.  Dev / demo deployment.
+
+# ──────────────────────────────────────────────
+# Parameters
+# ──────────────────────────────────────────────
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key-pair for SSH access
+
+  GitHubRepoUrl:
+    Type: String
+    Default: https://github.com/patel-aum/BlastRadius.git
+    Description: HTTPS clone URL of your GitHub repository
+
+  GitBranch:
+    Type: String
+    Default: main
+    Description: Branch to deploy
+
+  AllowedSSHCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to SSH (restrict to your IP for security, e.g. 203.0.113.5/32)
+
+  InstanceType:
+    Type: String
+    Default: t3.xlarge
+    AllowedValues: [t3.large, t3.xlarge, t3.2xlarge]
+    Description: EC2 instance size (t3.xlarge = 4 vCPU, 16 GB recommended)
+
+  VolumeSize:
+    Type: Number
+    Default: 50
+    MinValue: 30
+    Description: EBS volume size in GB (gp3)
+
+Resources:
+
+  # ── VPC (simple single-AZ) ────────────────────
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: contract-guardian-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: contract-guardian-public
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref RouteTable
+
+  # ── Security Group ────────────────────────────
+  InstanceSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Contract Guardian - allow web + SSH
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSSHCidr
+          Description: SSH
+        - IpProtocol: tcp
+          FromPort: 8585
+          ToPort: 8585
+          CidrIp: 0.0.0.0/0
+          Description: OpenMetadata UI
+        - IpProtocol: tcp
+          FromPort: 8501
+          ToPort: 8501
+          CidrIp: 0.0.0.0/0
+          Description: Streamlit Dashboard
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+          Description: MCP Server
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+          Description: Airflow UI
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: contract-guardian-sg
+
+  # ── IAM Role (for SSM Session Manager — optional SSH alternative) ──
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Name
+          Value: contract-guardian-role
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  # ── EC2 Instance ──────────────────────────────
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionAMI, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref InstanceSG]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref VolumeSize
+            VolumeType: gp3
+            Encrypted: true
+      Tags:
+        - Key: Name
+          Value: contract-guardian
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          exec > /var/log/user-data.log 2>&1
+
+          echo "===== Contract Guardian Bootstrap ====="
+
+          # ── 1. System updates ──
+          dnf update -y
+
+          # ── 2. Install Docker ──
+          dnf install -y docker
+          systemctl enable docker && systemctl start docker
+          usermod -aG docker ec2-user
+
+          # ── 3. Install Docker Compose v2 ──
+          DOCKER_CONFIG=/usr/local/lib/docker/cli-plugins
+          mkdir -p $DOCKER_CONFIG
+          curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+               -o $DOCKER_CONFIG/docker-compose
+          chmod +x $DOCKER_CONFIG/docker-compose
+          ln -sf $DOCKER_CONFIG/docker-compose /usr/local/bin/docker-compose
+
+          # ── 4. Install Git ──
+          dnf install -y git
+
+          # ── 5. Tune vm.max_map_count for Elasticsearch ──
+          sysctl -w vm.max_map_count=262144
+          echo "vm.max_map_count=262144" >> /etc/sysctl.conf
+
+          # ── 6. Clone the repo ──
+          cd /home/ec2-user
+          git clone -b ${GitBranch} ${GitHubRepoUrl} app
+          chown -R ec2-user:ec2-user app
+          cd app
+
+          # ── 7. Create .env from .env.example and fill defaults ──
+          cp .env.example .env
+          sed -i 's|^OM_DATABASE=.*|OM_DATABASE=openmetadata_db|' .env
+          sed -i 's|^MYSQL_ROOT_PASSWORD=.*|MYSQL_ROOT_PASSWORD=password|' .env
+          sed -i 's|^SEARCH_TYPE=.*|SEARCH_TYPE=elasticsearch|' .env
+          sed -i 's|^ELASTICSEARCH_HOST=.*|ELASTICSEARCH_HOST=elasticsearch|' .env
+          sed -i 's|^AIRFLOW_USERNAME=.*|AIRFLOW_USERNAME=admin|' .env
+          sed -i 's|^AIRFLOW_PASSWORD=.*|AIRFLOW_PASSWORD=admin|' .env
+          sed -i "s|^FERNET_KEY=.*|FERNET_KEY=jJ/9sz0g0OHxsfxOoSfdFdmk3ysNmPRnH3TUAbz3IHA=|" .env
+          sed -i 's|^OM_AUTH_PROVIDER=.*|OM_AUTH_PROVIDER=openmetadata|' .env
+          sed -i 's|^OM_ADMIN_USER=.*|OM_ADMIN_USER=admin@openmetadata.org|' .env
+          sed -i 's|^OM_ADMIN_PASSWORD=.*|OM_ADMIN_PASSWORD=admin|' .env
+
+          # ── 8. Start the full stack ──
+          docker compose up -d --build
+
+          echo "===== Bootstrap complete ====="
+
+  # ── Elastic IP (stable public address) ────────
+  EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref EC2Instance
+      Tags:
+        - Key: Name
+          Value: contract-guardian-eip
+
+# ── AMI Map (Amazon Linux 2023 — x86_64) ───────
+Mappings:
+  RegionAMI:
+    us-east-1:
+      AMI: ami-0c02fb55956c7d316
+    us-east-2:
+      AMI: ami-089a545a9ed9893b6
+    us-west-1:
+      AMI: ami-04a50faf2a2ec1901
+    us-west-2:
+      AMI: ami-0735c191cf914754d
+    eu-west-1:
+      AMI: ami-0f3164307ee5d695a
+    eu-central-1:
+      AMI: ami-0faab6bdbac9486fb
+    ap-south-1:
+      AMI: ami-0e306788ff2473ccb
+    ap-southeast-1:
+      AMI: ami-0df7a207adb9748c7
+    ap-southeast-2:
+      AMI: ami-0e09e6edc6e396e06
+
+# ──────────────────────────────────────────────
+# Outputs
+# ──────────────────────────────────────────────
+Outputs:
+  PublicIP:
+    Description: Elastic IP of the instance
+    Value: !Ref EIP
+
+  OpenMetadataURL:
+    Description: OpenMetadata UI
+    Value: !Sub "http://${EIP}:8585"
+
+  DashboardURL:
+    Description: Streamlit Dashboard
+    Value: !Sub "http://${EIP}:8501"
+
+  MCPServerURL:
+    Description: MCP Server endpoint
+    Value: !Sub "http://${EIP}:8000/mcp"
+
+  AirflowURL:
+    Description: Airflow UI
+    Value: !Sub "http://${EIP}:8080"
+
+  SSHCommand:
+    Description: SSH into the instance
+    Value: !Sub "ssh -i <your-key>.pem ec2-user@${EIP}"
