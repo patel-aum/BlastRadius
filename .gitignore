@@ -1,0 +1,101 @@
+# ──────────────────────────────────────────────
+# Environment & Secrets
+# ──────────────────────────────────────────────
+.env
+*.pem
+*.der
+*.key
+*.cert
+*.crt
+
+# ──────────────────────────────────────────────
+# Python
+# ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.whl
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+*.manifest
+*.spec
+.venv/
+venv/
+env/
+ENV/
+.virtualenv/
+
+# pytest / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+
+# mypy / type-checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# ──────────────────────────────────────────────
+# Docker
+# ──────────────────────────────────────────────
+*.tar
+docker-compose.override.yml
+
+# ──────────────────────────────────────────────
+# IDE / Editor
+# ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+.cursor/
+
+# ──────────────────────────────────────────────
+# OS generated
+# ──────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ──────────────────────────────────────────────
+# Project-specific: test / scratch files
+# ──────────────────────────────────────────────
+script.md
+test_local.py
+test_login.py
+generate_pdf.py
+
+# ──────────────────────────────────────────────
+# Generated output
+# ──────────────────────────────────────────────
+*.pdf
+output/
+reports/
+tmp/

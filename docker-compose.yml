@@ -1,0 +1,358 @@
+volumes:
+  ingestion-volume-dag-airflow:
+  ingestion-volume-dags:
+  ingestion-volume-tmp:
+  es-data:
+  db-data:
+  shared-data:
+
+services:
+  # ──────────────────────────────────────────────
+  # OpenMetadata Infrastructure
+  # ──────────────────────────────────────────────
+  mysql:
+    container_name: openmetadata_mysql
+    image: docker.getcollate.io/openmetadata/db:1.5.11
+    restart: always
+    command: "--sort_buffer_size=10M"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-password}
+    ports:
+      - "3306:3306"
+    volumes:
+      - db-data:/var/lib/mysql
+    networks:
+      - app_net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: mysql --user=root --password=$$MYSQL_ROOT_PASSWORD --silent --execute "use openmetadata_db"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  elasticsearch:
+    container_name: openmetadata_elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.2
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms768m -Xmx768m
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    networks:
+      - app_net
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+    healthcheck:
+      test: "curl -s http://localhost:9200/_cluster/health?pretty | grep status | grep -qE 'green|yellow' || exit 1"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  execute-migrate-all:
+    container_name: execute_migrate_all
+    image: docker.getcollate.io/openmetadata/server:1.5.11
+    command: "./bootstrap/openmetadata-ops.sh migrate"
+    environment:
+      OPENMETADATA_CLUSTER_NAME: ${OPENMETADATA_CLUSTER_NAME:-openmetadata}
+      SERVER_PORT: ${SERVER_PORT:-8585}
+      SERVER_ADMIN_PORT: ${SERVER_ADMIN_PORT:-8586}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OPENMETADATA_HEAP_OPTS: "-Xmx1G -Xms1G"
+
+      # Database
+      DB_DRIVER_CLASS: ${DB_DRIVER_CLASS:-com.mysql.cj.jdbc.Driver}
+      DB_SCHEME: ${DB_SCHEME:-mysql}
+      DB_PARAMS: ${DB_PARAMS:-allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC}
+      DB_USER: ${DB_USER:-openmetadata_user}
+      DB_USER_PASSWORD: ${DB_USER_PASSWORD:-openmetadata_password}
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_PORT: ${DB_PORT:-3306}
+      OM_DATABASE: ${OM_DATABASE:-openmetadata_db}
+      MIGRATION_LIMIT_PARAM: ${MIGRATION_LIMIT_PARAM:-1200}
+
+      # ElasticSearch
+      SEARCH_TYPE: ${SEARCH_TYPE:-elasticsearch}
+      ELASTICSEARCH_HOST: ${ELASTICSEARCH_HOST:-elasticsearch}
+      ELASTICSEARCH_PORT: ${ELASTICSEARCH_PORT:-9200}
+      ELASTICSEARCH_SCHEME: ${ELASTICSEARCH_SCHEME:-http}
+      ELASTICSEARCH_USER: ${ELASTICSEARCH_USER:-""}
+      ELASTICSEARCH_PASSWORD: ${ELASTICSEARCH_PASSWORD:-""}
+      ELASTICSEARCH_INDEX_MAPPING_LANG: ${ELASTICSEARCH_INDEX_MAPPING_LANG:-EN}
+
+      # Auth
+      AUTHORIZER_CLASS_NAME: ${AUTHORIZER_CLASS_NAME:-org.openmetadata.service.security.DefaultAuthorizer}
+      AUTHORIZER_REQUEST_FILTER: ${AUTHORIZER_REQUEST_FILTER:-org.openmetadata.service.security.JwtFilter}
+      AUTHORIZER_ADMIN_PRINCIPALS: ${AUTHORIZER_ADMIN_PRINCIPALS:-[admin]}
+      AUTHORIZER_INGESTION_PRINCIPALS: ${AUTHORIZER_INGESTION_PRINCIPALS:-[ingestion-bot]}
+      AUTHORIZER_PRINCIPAL_DOMAIN: ${AUTHORIZER_PRINCIPAL_DOMAIN:-"openmetadata.org"}
+      AUTHORIZER_ENFORCE_PRINCIPAL_DOMAIN: ${AUTHORIZER_ENFORCE_PRINCIPAL_DOMAIN:-false}
+      AUTHORIZER_ENABLE_SECURE_SOCKET: ${AUTHORIZER_ENABLE_SECURE_SOCKET:-false}
+      AUTHENTICATION_PROVIDER: ${AUTHENTICATION_PROVIDER:-basic}
+      AUTHENTICATION_PUBLIC_KEYS: ${AUTHENTICATION_PUBLIC_KEYS:-[http://localhost:8585/api/v1/system/config/jwks]}
+      AUTHENTICATION_AUTHORITY: ${AUTHENTICATION_AUTHORITY:-https://accounts.google.com}
+      AUTHENTICATION_CLIENT_ID: ${AUTHENTICATION_CLIENT_ID:-""}
+      AUTHENTICATION_CALLBACK_URL: ${AUTHENTICATION_CALLBACK_URL:-""}
+      AUTHENTICATION_ENABLE_SELF_SIGNUP: ${AUTHENTICATION_ENABLE_SELF_SIGNUP:-true}
+
+      # JWT
+      RSA_PUBLIC_KEY_FILE_PATH: ${RSA_PUBLIC_KEY_FILE_PATH:-"./conf/public_key.der"}
+      RSA_PRIVATE_KEY_FILE_PATH: ${RSA_PRIVATE_KEY_FILE_PATH:-"./conf/private_key.der"}
+      JWT_ISSUER: ${JWT_ISSUER:-"open-metadata.org"}
+      JWT_KEY_ID: ${JWT_KEY_ID:-"Gb389a-9f76-gdjs-a92j-0242bk94356"}
+
+      # Pipeline
+      PIPELINE_SERVICE_CLIENT_ENDPOINT: ${PIPELINE_SERVICE_CLIENT_ENDPOINT:-http://ingestion:8080}
+      SERVER_HOST_API_URL: ${SERVER_HOST_API_URL:-http://openmetadata-server:8585/api}
+      PIPELINE_SERVICE_CLIENT_CLASS_NAME: ${PIPELINE_SERVICE_CLIENT_CLASS_NAME:-org.openmetadata.service.clients.pipeline.airflow.AirflowRESTClient}
+      PIPELINE_SERVICE_CLIENT_ENABLED: ${PIPELINE_SERVICE_CLIENT_ENABLED:-true}
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
+      FERNET_KEY: ${FERNET_KEY:-jJ/9sz0g0OHxsfxOoSfdFdmk3ysNmPRnH3TUAbz3IHA=}
+      SECRET_MANAGER: ${SECRET_MANAGER:-db}
+
+      # Web
+      WEB_CONF_URIPATH: ${WEB_CONF_URIPATH:-"/api"}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    networks:
+      - app_net
+    restart: on-failure
+
+  openmetadata-server:
+    container_name: openmetadata_server
+    image: docker.getcollate.io/openmetadata/server:1.5.11
+    restart: always
+    ports:
+      - "8585:8585"
+      - "8586:8586"
+    environment:
+      OPENMETADATA_CLUSTER_NAME: ${OPENMETADATA_CLUSTER_NAME:-openmetadata}
+      SERVER_PORT: ${SERVER_PORT:-8585}
+      SERVER_ADMIN_PORT: ${SERVER_ADMIN_PORT:-8586}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OPENMETADATA_HEAP_OPTS: "-Xmx1G -Xms1G"
+
+      DB_DRIVER_CLASS: ${DB_DRIVER_CLASS:-com.mysql.cj.jdbc.Driver}
+      DB_SCHEME: ${DB_SCHEME:-mysql}
+      DB_PARAMS: ${DB_PARAMS:-allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC}
+      DB_USER: ${DB_USER:-openmetadata_user}
+      DB_USER_PASSWORD: ${DB_USER_PASSWORD:-openmetadata_password}
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_PORT: ${DB_PORT:-3306}
+      OM_DATABASE: ${OM_DATABASE:-openmetadata_db}
+
+      SEARCH_TYPE: ${SEARCH_TYPE:-elasticsearch}
+      ELASTICSEARCH_HOST: ${ELASTICSEARCH_HOST:-elasticsearch}
+      ELASTICSEARCH_PORT: ${ELASTICSEARCH_PORT:-9200}
+      ELASTICSEARCH_SCHEME: ${ELASTICSEARCH_SCHEME:-http}
+      ELASTICSEARCH_USER: ${ELASTICSEARCH_USER:-""}
+      ELASTICSEARCH_PASSWORD: ${ELASTICSEARCH_PASSWORD:-""}
+      ELASTICSEARCH_INDEX_MAPPING_LANG: ${ELASTICSEARCH_INDEX_MAPPING_LANG:-EN}
+
+      AUTHORIZER_CLASS_NAME: ${AUTHORIZER_CLASS_NAME:-org.openmetadata.service.security.DefaultAuthorizer}
+      AUTHORIZER_REQUEST_FILTER: ${AUTHORIZER_REQUEST_FILTER:-org.openmetadata.service.security.JwtFilter}
+      AUTHORIZER_ADMIN_PRINCIPALS: ${AUTHORIZER_ADMIN_PRINCIPALS:-[admin]}
+      AUTHORIZER_INGESTION_PRINCIPALS: ${AUTHORIZER_INGESTION_PRINCIPALS:-[ingestion-bot]}
+      AUTHORIZER_PRINCIPAL_DOMAIN: ${AUTHORIZER_PRINCIPAL_DOMAIN:-"openmetadata.org"}
+      AUTHORIZER_ENFORCE_PRINCIPAL_DOMAIN: ${AUTHORIZER_ENFORCE_PRINCIPAL_DOMAIN:-false}
+      AUTHORIZER_ENABLE_SECURE_SOCKET: ${AUTHORIZER_ENABLE_SECURE_SOCKET:-false}
+      AUTHENTICATION_PROVIDER: ${AUTHENTICATION_PROVIDER:-basic}
+      AUTHENTICATION_PUBLIC_KEYS: ${AUTHENTICATION_PUBLIC_KEYS:-[http://localhost:8585/api/v1/system/config/jwks]}
+      AUTHENTICATION_AUTHORITY: ${AUTHENTICATION_AUTHORITY:-https://accounts.google.com}
+      AUTHENTICATION_CLIENT_ID: ${AUTHENTICATION_CLIENT_ID:-""}
+      AUTHENTICATION_CALLBACK_URL: ${AUTHENTICATION_CALLBACK_URL:-""}
+      AUTHENTICATION_ENABLE_SELF_SIGNUP: ${AUTHENTICATION_ENABLE_SELF_SIGNUP:-true}
+
+      RSA_PUBLIC_KEY_FILE_PATH: ${RSA_PUBLIC_KEY_FILE_PATH:-"./conf/public_key.der"}
+      RSA_PRIVATE_KEY_FILE_PATH: ${RSA_PRIVATE_KEY_FILE_PATH:-"./conf/private_key.der"}
+      JWT_ISSUER: ${JWT_ISSUER:-"open-metadata.org"}
+      JWT_KEY_ID: ${JWT_KEY_ID:-"Gb389a-9f76-gdjs-a92j-0242bk94356"}
+
+      PIPELINE_SERVICE_CLIENT_ENDPOINT: ${PIPELINE_SERVICE_CLIENT_ENDPOINT:-http://ingestion:8080}
+      SERVER_HOST_API_URL: ${SERVER_HOST_API_URL:-http://openmetadata-server:8585/api}
+      PIPELINE_SERVICE_CLIENT_CLASS_NAME: ${PIPELINE_SERVICE_CLIENT_CLASS_NAME:-org.openmetadata.service.clients.pipeline.airflow.AirflowRESTClient}
+      PIPELINE_SERVICE_CLIENT_ENABLED: ${PIPELINE_SERVICE_CLIENT_ENABLED:-true}
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
+      FERNET_KEY: ${FERNET_KEY:-jJ/9sz0g0OHxsfxOoSfdFdmk3ysNmPRnH3TUAbz3IHA=}
+      SECRET_MANAGER: ${SECRET_MANAGER:-db}
+
+      WEB_CONF_URIPATH: ${WEB_CONF_URIPATH:-"/api"}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      execute-migrate-all:
+        condition: service_completed_successfully
+    networks:
+      - app_net
+    deploy:
+      resources:
+        limits:
+          memory: 2048M
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8586/healthcheck"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  ingestion:
+    container_name: openmetadata_ingestion
+    image: docker.getcollate.io/openmetadata/ingestion:1.5.11
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_PORT: ${DB_PORT:-3306}
+    depends_on:
+      elasticsearch:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      openmetadata-server:
+        condition: service_healthy
+    volumes:
+      - ingestion-volume-dag-airflow:/opt/airflow/dag_generated_configs
+      - ingestion-volume-dags:/opt/airflow/dags
+      - ingestion-volume-tmp:/tmp
+    networks:
+      - app_net
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+
+  # ──────────────────────────────────────────────
+  # Health Gate — blocks custom services until OM API is live
+  # ──────────────────────────────────────────────
+  wait-for-openmetadata:
+    container_name: wait_for_openmetadata
+    image: curlimages/curl:latest
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        echo "Waiting for OpenMetadata API to be ready..."
+        until curl -sf http://openmetadata-server:8585/api/v1/system/version > /dev/null 2>&1; do
+          echo "  ...not ready yet, retrying in 10s"
+          sleep 10
+        done
+        echo "OpenMetadata API is ready!"
+    depends_on:
+      openmetadata-server:
+        condition: service_healthy
+    networks:
+      - app_net
+
+  # ──────────────────────────────────────────────
+  # Custom Services
+  # ──────────────────────────────────────────────
+  contract-sync:
+    container_name: contract_sync
+    build:
+      context: ./contract_engine
+      dockerfile: Dockerfile
+    environment:
+      OM_SERVER_URL: ${OM_SERVER_URL:-http://openmetadata-server:8585/api}
+      OM_AUTH_PROVIDER: ${OM_AUTH_PROVIDER:-openmetadata}
+      OM_JWT_TOKEN: ${OM_JWT_TOKEN:-}
+      OM_ADMIN_USER: ${OM_ADMIN_USER:-admin@openmetadata.org}
+      OM_ADMIN_PASSWORD: ${OM_ADMIN_PASSWORD:-admin}
+      CONTRACTS_DIR: /contracts
+    volumes:
+      - ./contracts:/contracts:ro
+      - ./schemas:/app/schemas:ro
+      - shared-data:/shared
+    depends_on:
+      wait-for-openmetadata:
+        condition: service_completed_successfully
+    networks:
+      - app_net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  mcp-server:
+    container_name: mcp_server
+    build:
+      context: ./mcp_server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      OM_SERVER_URL: ${OM_SERVER_URL:-http://openmetadata-server:8585/api}
+      OM_AUTH_PROVIDER: ${OM_AUTH_PROVIDER:-openmetadata}
+      OM_JWT_TOKEN: ${OM_JWT_TOKEN:-}
+      OM_ADMIN_USER: ${OM_ADMIN_USER:-admin@openmetadata.org}
+      OM_ADMIN_PASSWORD: ${OM_ADMIN_PASSWORD:-admin}
+      CONTRACTS_DIR: /contracts
+      MCP_PORT: 8000
+      PYTHONPATH: /contract_engine
+    volumes:
+      - ./contracts:/contracts:ro
+      - ./contract_engine:/contract_engine:ro
+      - ./schemas:/schemas:ro
+      - shared-data:/shared
+    depends_on:
+      wait-for-openmetadata:
+        condition: service_completed_successfully
+    networks:
+      - app_net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  dashboard:
+    container_name: contract_dashboard
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      OM_SERVER_URL: ${OM_SERVER_URL:-http://openmetadata-server:8585/api}
+      OM_AUTH_PROVIDER: ${OM_AUTH_PROVIDER:-openmetadata}
+      OM_JWT_TOKEN: ${OM_JWT_TOKEN:-}
+      OM_ADMIN_USER: ${OM_ADMIN_USER:-admin@openmetadata.org}
+      OM_ADMIN_PASSWORD: ${OM_ADMIN_PASSWORD:-admin}
+      CONTRACTS_DIR: /contracts
+      PYTHONPATH: /contract_engine
+    volumes:
+      - ./contracts:/contracts:ro
+      - ./contract_engine:/contract_engine:ro
+      - ./schemas:/schemas:ro
+      - shared-data:/shared
+    depends_on:
+      wait-for-openmetadata:
+        condition: service_completed_successfully
+    networks:
+      - app_net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+networks:
+  app_net:
+    ipam:
+      driver: default
+      config:
+        - subnet: "172.16.240.0/24"

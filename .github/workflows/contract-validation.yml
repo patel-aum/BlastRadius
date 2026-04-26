@@ -1,0 +1,125 @@
+name: Data Contract Validation
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**/*.yaml"
+      - "contracts/**/*.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  validate-contracts:
+    name: Validate Data Contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get changed contract files
+        id: changed
+        run: |
+          FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'contracts/' | grep -E '\.ya?ml$' || true)
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$FILES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "count=$(echo "$FILES" | grep -c . || echo 0)" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if no contract changes
+        if: steps.changed.outputs.count == '0'
+        run: echo "No contract files changed — skipping validation"
+
+      - name: Set up Python
+        if: steps.changed.outputs.count != '0'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        if: steps.changed.outputs.count != '0'
+        run: pip install pyyaml jsonschema pydantic
+
+      - name: Validate each changed contract
+        if: steps.changed.outputs.count != '0'
+        id: validate
+        run: |
+          OVERALL="PASS"
+          REPORT="## Data Contract PR Validation\n\n"
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            echo "::group::Validating $file"
+
+            export CONTRACT_PATH="$file"
+            export SCHEMA_PATH="schemas/contract-schema.json"
+            export BASE_REF="origin/${{ github.base_ref }}"
+            export FAIL_ON_BREAKING="true"
+
+            if python github-action/validate.py; then
+              REPORT="$REPORT\n### ✅ $file\nAll checks passed.\n"
+            else
+              OVERALL="FAIL"
+              REPORT="$REPORT\n### ❌ $file\nValidation failed — see details above.\n"
+            fi
+
+            echo "::endgroup::"
+          done <<< "${{ steps.changed.outputs.files }}"
+
+          echo "result=$OVERALL" >> "$GITHUB_OUTPUT"
+
+          # Write report for PR comment
+          echo -e "$REPORT" > /tmp/validation-report.md
+
+      - name: Post PR comment
+        if: steps.changed.outputs.count != '0' && always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            let report = '';
+            try {
+              report = fs.readFileSync('/tmp/validation-report.md', 'utf8');
+            } catch {
+              report = 'Validation report not generated.';
+            }
+
+            const body = `<!-- contract-validation-report -->\n${report}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c =>
+              c.body.includes('<!-- contract-validation-report -->')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail if validation failed
+        if: steps.validate.outputs.result == 'FAIL'
+        run: |
+          echo "::error::One or more contracts failed validation"
+          exit 1

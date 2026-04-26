@@ -1,0 +1,50 @@
+name: "Data Contract Validator"
+description: "Validates YAML data contracts against the ODCS meta-schema and detects breaking changes"
+author: "Data Contract Governance Engine"
+
+inputs:
+  contract-path:
+    description: "Path to the contract YAML file to validate"
+    required: true
+  schema-path:
+    description: "Path to the ODCS JSON meta-schema"
+    required: false
+    default: "schemas/contract-schema.json"
+  base-ref:
+    description: "Base branch ref for breaking-change detection"
+    required: false
+    default: "origin/main"
+  fail-on-breaking:
+    description: "Fail the action if breaking changes are detected"
+    required: false
+    default: "true"
+
+outputs:
+  validation-result:
+    description: "PASS or FAIL"
+    value: ${{ steps.validate.outputs.result }}
+  report:
+    description: "Validation report in Markdown format"
+    value: ${{ steps.validate.outputs.report }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install pyyaml jsonschema pydantic
+
+    - name: Run validation
+      id: validate
+      shell: bash
+      env:
+        CONTRACT_PATH: ${{ inputs.contract-path }}
+        SCHEMA_PATH: ${{ inputs.schema-path }}
+        BASE_REF: ${{ inputs.base-ref }}
+        FAIL_ON_BREAKING: ${{ inputs.fail-on-breaking }}
+      run: python ${{ github.action_path }}/validate.py

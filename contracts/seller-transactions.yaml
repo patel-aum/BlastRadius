@@ -1,0 +1,152 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+domain: seller
+dataProduct: seller-transactions
+version: 1.0.0
+status: active
+
+description:
+  purpose: Core payment transaction data for seller analytics and reporting
+  limitations: Contains only seller-side perspective; no buyer information included
+  usage: Predict sales trends, generate seller performance reports
+
+server:
+  type: postgres
+  database: analytics_db
+  schema: public
+
+schema:
+  - name: seller_transactions
+    physicalName: seller_transactions
+    physicalType: table
+    description: Daily aggregated seller transaction metrics
+    tags:
+      - finance
+      - payments
+    properties:
+      - name: txn_id
+        logicalType: string
+        required: true
+        primaryKey: true
+        classification: internal
+        description: Unique transaction identifier
+
+      - name: seller_id
+        logicalType: string
+        required: true
+        classification: internal
+        description: Foreign key to seller entity
+
+      - name: txn_ref_dt
+        logicalType: date
+        required: true
+        partitioned: true
+        classification: public
+        description: Transaction reference date
+        quality:
+          - metric: nullValues
+            mustBe: 0
+            severity: error
+            dimension: completeness
+
+      - name: amount
+        logicalType: double
+        required: true
+        classification: confidential
+        description: Transaction amount in USD
+        quality:
+          - metric: nullValues
+            mustBe: 0
+            severity: error
+            dimension: completeness
+          - metric: invalidValues
+            mustBe: 0
+            severity: error
+            dimension: validity
+
+      - name: currency
+        logicalType: string
+        required: true
+        classification: public
+        description: ISO 4217 currency code
+        examples: ["USD", "EUR", "GBP"]
+
+      - name: status
+        logicalType: string
+        required: true
+        classification: public
+        description: Transaction status
+        examples: ["completed", "pending", "refunded"]
+
+      - name: created_at
+        logicalType: timestamp
+        required: true
+        classification: public
+        description: Record creation timestamp
+
+    quality:
+      - metric: rowCount
+        mustBeGreaterThan: 100000
+        severity: error
+        dimension: completeness
+        description: Must have at least 100K rows for valid analytics
+
+      - metric: duplicateValues
+        mustBe: 0
+        severity: error
+        dimension: uniqueness
+        description: No duplicate transaction IDs allowed
+
+slaProperties:
+  - property: latency
+    value: 4
+    unit: d
+    element: seller_transactions.txn_ref_dt
+  - property: frequency
+    value: 1
+    unit: d
+  - property: retention
+    value: 3
+    unit: y
+
+quality:
+  - metric: freshness
+    mustBeLessThan: 4
+    unit: d
+    severity: error
+    dimension: timeliness
+    description: Data must be no older than 4 days
+
+team:
+  name: seller-data-team
+  description: Team responsible for seller analytics data products
+  members:
+    - username: jdoe
+      role: Owner
+      dateIn: "2024-01-15"
+    - username: asmith
+      role: Data Engineer
+      dateIn: "2024-03-01"
+
+roles:
+  - role: analytics_reader
+    access: read
+    firstLevelApprovers: jdoe
+  - role: data_engineer
+    access: readwrite
+    firstLevelApprovers: jdoe
+
+tags:
+  - finance
+  - transactions
+  - tier-1
+
+support:
+  - channel: "#seller-data-support"
+    tool: slack
+  - channel: seller-data-alerts
+    tool: email
+    url: "mailto:seller-data@company.io"
+
+contractCreatedTs: "2024-06-15T10:00:00+00:00"

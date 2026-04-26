@@ -1,0 +1,142 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: "c3d4e5f6-a7b8-9012-cdef-123456789012"
+domain: product
+dataProduct: product-catalog
+version: 1.2.0
+status: active
+
+description:
+  purpose: Master product catalog for all downstream services (search, recommendations, pricing)
+  limitations: Images and media assets are references only (URLs), not stored inline
+  usage: Product search index, recommendation engine input, pricing service lookups
+
+server:
+  type: postgres
+  database: analytics_db
+  schema: public
+
+schema:
+  - name: product_catalog
+    physicalName: product_catalog
+    physicalType: table
+    description: Master product dimension table
+    tags:
+      - product
+      - master-data
+    properties:
+      - name: product_id
+        logicalType: string
+        required: true
+        primaryKey: true
+        classification: public
+        description: Unique product SKU identifier
+
+      - name: product_name
+        logicalType: string
+        required: true
+        classification: public
+        description: Display name of the product
+        quality:
+          - metric: nullValues
+            mustBe: 0
+            severity: error
+            dimension: completeness
+
+      - name: category
+        logicalType: string
+        required: true
+        classification: public
+        description: Product category hierarchy path
+        examples: ["Electronics > Phones", "Home > Kitchen"]
+
+      - name: price
+        logicalType: double
+        required: true
+        classification: internal
+        description: Current listed price in USD
+        quality:
+          - metric: nullValues
+            mustBe: 0
+            severity: error
+            dimension: completeness
+          - metric: invalidValues
+            mustBe: 0
+            severity: error
+            dimension: validity
+
+      - name: is_active
+        logicalType: boolean
+        required: true
+        classification: public
+        description: Whether the product is currently listed
+
+      - name: created_at
+        logicalType: timestamp
+        required: true
+        classification: public
+        description: Product listing creation date
+
+      - name: updated_at
+        logicalType: timestamp
+        required: true
+        classification: public
+        description: Last product data update timestamp
+
+    quality:
+      - metric: rowCount
+        mustBeGreaterThan: 10000
+        severity: warning
+        dimension: completeness
+        description: Catalog should have at least 10K products
+
+      - metric: duplicateValues
+        mustBe: 0
+        severity: error
+        dimension: uniqueness
+        description: No duplicate product IDs
+
+slaProperties:
+  - property: latency
+    value: 1
+    unit: d
+  - property: frequency
+    value: 6
+    unit: d
+  - property: retention
+    value: 10
+    unit: y
+
+quality:
+  - metric: freshness
+    mustBeLessThan: 1
+    unit: d
+    severity: warning
+    dimension: timeliness
+    description: Product catalog should be refreshed daily
+
+team:
+  name: product-data-team
+  members:
+    - username: daustin
+      role: Owner
+      dateIn: "2024-01-01"
+
+roles:
+  - role: catalog_reader
+    access: read
+    firstLevelApprovers: daustin
+  - role: catalog_editor
+    access: readwrite
+    firstLevelApprovers: daustin
+
+tags:
+  - product
+  - master-data
+  - tier-2
+
+support:
+  - channel: "#product-catalog-support"
+    tool: slack
+
+contractCreatedTs: "2024-04-10T08:00:00+00:00"

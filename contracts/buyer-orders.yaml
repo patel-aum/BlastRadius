@@ -1,0 +1,145 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+domain: buyer
+dataProduct: buyer-orders
+version: 2.1.0
+status: active
+
+description:
+  purpose: Buyer order lifecycle data for fulfillment tracking and buyer analytics
+  limitations: Does not include payment gateway details or PCI-scoped fields
+  usage: Order fulfillment dashboards, buyer behavior analysis
+
+server:
+  type: postgres
+  database: analytics_db
+  schema: public
+
+schema:
+  - name: buyer_orders
+    physicalName: buyer_orders
+    physicalType: table
+    description: Order records from buyer checkout through delivery
+    tags:
+      - ecommerce
+      - orders
+    properties:
+      - name: order_id
+        logicalType: string
+        required: true
+        primaryKey: true
+        classification: internal
+        description: Unique order identifier
+
+      - name: buyer_id
+        logicalType: string
+        required: true
+        classification: internal
+        description: Foreign key to buyer entity
+
+      - name: order_date
+        logicalType: date
+        required: true
+        partitioned: true
+        classification: public
+        description: Date the order was placed
+        quality:
+          - metric: nullValues
+            mustBe: 0
+            severity: error
+            dimension: completeness
+
+      - name: total_amount
+        logicalType: double
+        required: true
+        classification: confidential
+        description: Total order amount including tax and shipping
+        quality:
+          - metric: nullValues
+            mustBe: 0
+            severity: error
+            dimension: completeness
+
+      - name: item_count
+        logicalType: integer
+        required: true
+        classification: public
+        description: Number of items in the order
+
+      - name: shipping_status
+        logicalType: string
+        required: true
+        classification: public
+        description: Current shipping status
+        examples: ["pending", "shipped", "delivered", "returned"]
+
+      - name: region
+        logicalType: string
+        required: false
+        classification: public
+        description: Buyer geographic region
+
+      - name: updated_at
+        logicalType: timestamp
+        required: true
+        classification: public
+        description: Last record update timestamp
+
+    quality:
+      - metric: rowCount
+        mustBeGreaterThan: 50000
+        severity: error
+        dimension: completeness
+
+      - metric: duplicateValues
+        mustBe: 0
+        severity: error
+        dimension: uniqueness
+
+slaProperties:
+  - property: latency
+    value: 2
+    unit: d
+  - property: frequency
+    value: 1
+    unit: d
+  - property: retention
+    value: 5
+    unit: y
+
+quality:
+  - metric: freshness
+    mustBeLessThan: 2
+    unit: d
+    severity: error
+    dimension: timeliness
+
+team:
+  name: buyer-platform-team
+  members:
+    - username: mhopper
+      role: Owner
+      dateIn: "2024-02-01"
+    - username: klee
+      role: Data Analyst
+      dateIn: "2024-05-10"
+
+roles:
+  - role: fulfillment_reader
+    access: read
+    firstLevelApprovers: mhopper
+  - role: platform_admin
+    access: admin
+    firstLevelApprovers: mhopper
+
+tags:
+  - ecommerce
+  - orders
+  - tier-1
+
+support:
+  - channel: "#buyer-data-help"
+    tool: slack
+
+contractCreatedTs: "2024-08-20T14:30:00+00:00"
