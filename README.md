@@ -12,12 +12,12 @@ BlastRadius AI enforces data contracts as code. Teams define schema, quality rul
 
 Everything is deployed on AWS EC2 with Cloudflare HTTPS domains. Click any link below:
 
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| **OpenMetadata** | [blastradius.aumpatel.xyz](https://blastradius.aumpatel.xyz) | `admin@openmetadata.org` / `admin` |
-| **Compliance Dashboard** | [br-dashboard.aumpatel.xyz](https://br-dashboard.aumpatel.xyz) | — |
-| **AI Chat Agent** | [br-ai.aumpatel.xyz](https://br-ai.aumpatel.xyz) | — |
-| **Airflow** | [br-airflow.aumpatel.xyz](https://br-airflow.aumpatel.xyz) | `admin` / `admin` |
+| Service | URL | 
+|---------|-----|
+| **OpenMetadata** | [blastradius.aumpatel.xyz](https://blastradius.aumpatel.xyz) |
+| **Compliance Dashboard** | [br-dashboard.aumpatel.xyz](https://br-dashboard.aumpatel.xyz)  |
+| **AI Chat Agent** | [br-ai.aumpatel.xyz](https://br-ai.aumpatel.xyz)  |
+| **Airflow** | [br-airflow.aumpatel.xyz](https://br-airflow.aumpatel.xyz) |
 
 ### Quick Tour for Judges
 
